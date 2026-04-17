@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,18 +9,21 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/use-toast";
+import { canManageOrgUnit } from "@/utils/hierarchyPermissions";
+import type { OrgUnit as HierarchyOrgUnit } from "@/utils/hierarchyPermissions";
 
-type OrgLevel = "pusat" | "provinsi" | "kabupaten" | "kecamatan" | "ranting";
+type OrgLevel = "pusat" | "wilayah" | "kabupaten" | "kecamatan" | "ranting";
 
 type OrgUnit = {
   id: string;
-  nama: string;
-  level: OrgLevel;
+  name: string;
+  type: OrgLevel;
   parent_id: string | null;
   deskripsi: string | null;
   alamat: string | null;
   email: string | null;
   telepon: string | null;
+  hierarchy_level: number;
 };
 
 interface Props {
@@ -28,23 +32,24 @@ interface Props {
   editData?: OrgUnit | null;
 }
 
-const ORG_LEVELS: OrgLevel[] = ["pusat", "provinsi", "kabupaten", "kecamatan", "ranting"];
+const ORG_LEVELS: OrgLevel[] = ["pusat", "wilayah", "kabupaten", "kecamatan", "ranting"];
 
 const PARENT_LEVELS: Record<OrgLevel, OrgLevel | null> = {
   pusat: null,
-  provinsi: "pusat",
-  kabupaten: "provinsi",
+  wilayah: "pusat",
+  kabupaten: "wilayah",
   kecamatan: "kabupaten",
   ranting: "kecamatan",
 };
 
 export function OrgUnitFormDialog({ open, onClose, editData }: Props) {
   const qc = useQueryClient();
+  const { orgUnitId, managedOrgUnits, hierarchyLevel, user } = useAuth();
   const isEdit = !!editData;
 
   const [form, setForm] = useState({
-    nama: "",
-    level: "provinsi" as OrgLevel,
+    name: "",
+    type: "wilayah" as OrgLevel,
     parent_id: "",
     deskripsi: "",
     alamat: "",
@@ -53,13 +58,25 @@ export function OrgUnitFormDialog({ open, onClose, editData }: Props) {
   });
   const [loading, setLoading] = useState(false);
 
-  const parentLevel = PARENT_LEVELS[form.level];
+  const parentLevel = PARENT_LEVELS[form.type];
+
+  // Fetch all org units untuk permission checking
+  const { data: allOrgUnits } = useQuery({
+    queryKey: ["org-all-units"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("org_units")
+        .select("id, name, type, parent_id, hierarchy_level")
+        .order("hierarchy_level", { ascending: true });
+      return data || [];
+    },
+  });
 
   const { data: parentUnits } = useQuery({
     queryKey: ["org-units-by-level", parentLevel],
     queryFn: async () => {
       if (!parentLevel) return [];
-      const { data } = await supabase.from("org_units").select("id, nama").eq("level", parentLevel).order("nama");
+      const { data } = await supabase.from("org_units").select("id, name").eq("type", parentLevel).order("name");
       return data ?? [];
     },
     enabled: !!parentLevel,
@@ -68,8 +85,8 @@ export function OrgUnitFormDialog({ open, onClose, editData }: Props) {
   useEffect(() => {
     if (editData) {
       setForm({
-        nama: editData.nama,
-        level: editData.level,
+        name: editData.name,
+        type: editData.type,
         parent_id: editData.parent_id ?? "",
         deskripsi: editData.deskripsi ?? "",
         alamat: editData.alamat ?? "",
@@ -77,17 +94,17 @@ export function OrgUnitFormDialog({ open, onClose, editData }: Props) {
         telepon: editData.telepon ?? "",
       });
     } else {
-      setForm({ nama: "", level: "provinsi", parent_id: "", deskripsi: "", alamat: "", email: "", telepon: "" });
+      setForm({ name: "", type: "wilayah", parent_id: "", deskripsi: "", alamat: "", email: "", telepon: "" });
     }
   }, [editData, open]);
 
-  // Reset parent_id when level changes
+  // Reset parent_id when type changes
   useEffect(() => {
     setForm((f) => ({ ...f, parent_id: "" }));
-  }, [form.level]);
+  }, [form.type]);
 
   const handleSubmit = async () => {
-    if (!form.nama.trim()) {
+    if (!form.name.trim()) {
       toast({ title: "Validasi Gagal", description: "Nama unit organisasi wajib diisi.", variant: "destructive" });
       return;
     }
@@ -95,17 +112,69 @@ export function OrgUnitFormDialog({ open, onClose, editData }: Props) {
       toast({ title: "Validasi Gagal", description: `Pilih unit ${parentLevel} induk terlebih dahulu.`, variant: "destructive" });
       return;
     }
+
+    // Check permission untuk edit
+    if (isEdit && editData && allOrgUnits) {
+      const canManage = canManageOrgUnit(
+        {
+          id: user?.id || '',
+          email: user?.email || '',
+          role: 'admin',
+          org_unit_id: orgUnitId,
+          managed_org_units: managedOrgUnits,
+          hierarchy_level: hierarchyLevel,
+        },
+        editData.id,
+        editData.hierarchy_level,
+        allOrgUnits as HierarchyOrgUnit[]
+      );
+
+      if (!canManage) {
+        toast({ 
+          title: "Akses Ditolak", 
+          description: "Anda tidak memiliki izin untuk mengedit unit organisasi ini.",
+          variant: "destructive"
+        });
+        return;
+      }
+    }
+
+    // Check permission untuk create (hanya jika parent ditetapkan)
+    if (!isEdit && form.parent_id && allOrgUnits) {
+      const canManage = canManageOrgUnit(
+        {
+          id: user?.id || '',
+          email: user?.email || '',
+          role: 'admin',
+          org_unit_id: orgUnitId,
+          managed_org_units: managedOrgUnits,
+          hierarchy_level: hierarchyLevel,
+        },
+        form.parent_id,
+        0, // hierarchy_level will be set by backend
+        allOrgUnits as HierarchyOrgUnit[]
+      );
+
+      if (!canManage) {
+        toast({ 
+          title: "Akses Ditolak", 
+          description: "Anda tidak memiliki izin untuk membuat unit di bawah unit organisasi tersebut.",
+          variant: "destructive"
+        });
+        return;
+      }
+    }
+
     setLoading(true);
     try {
       const payload = {
-        nama: form.nama.trim(),
-        level: form.level,
+        name: form.name.trim(),
+        type: form.type,
         parent_id: form.parent_id || null,
         deskripsi: form.deskripsi.trim() || null,
         alamat: form.alamat.trim() || null,
         email: form.email.trim() || null,
         telepon: form.telepon.trim() || null,
-        updated_at: new Date().toISOString(),
       };
 
       if (isEdit && editData) {
@@ -119,8 +188,9 @@ export function OrgUnitFormDialog({ open, onClose, editData }: Props) {
       }
 
       qc.invalidateQueries({ queryKey: ["org-pusat"] });
-      qc.invalidateQueries({ queryKey: ["org-provinces"] });
-      qc.invalidateQueries({ queryKey: ["org-level-counts"] });
+      qc.invalidateQueries({ queryKey: ["org-wilayah"] });
+      qc.invalidateQueries({ queryKey: ["org-level-units"] });
+      qc.invalidateQueries({ queryKey: ["org-all-units"] });
       qc.invalidateQueries({ queryKey: ["org-units-list"] });
       onClose();
     } catch (err: any) {
@@ -140,10 +210,10 @@ export function OrgUnitFormDialog({ open, onClose, editData }: Props) {
         <div className="space-y-4 py-2">
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label>Level <span className="text-destructive">*</span></Label>
+              <Label>Tipe <span className="text-destructive">*</span></Label>
               <Select
-                value={form.level}
-                onValueChange={(v: OrgLevel) => setForm((f) => ({ ...f, level: v }))}
+                value={form.type}
+                onValueChange={(v: OrgLevel) => setForm((f) => ({ ...f, type: v }))}
                 disabled={isEdit}
               >
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -161,7 +231,7 @@ export function OrgUnitFormDialog({ open, onClose, editData }: Props) {
                   <SelectTrigger><SelectValue placeholder={`Pilih ${parentLevel}`} /></SelectTrigger>
                   <SelectContent>
                     {parentUnits?.map((u) => (
-                      <SelectItem key={u.id} value={u.id}>{u.nama}</SelectItem>
+                      <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -170,8 +240,8 @@ export function OrgUnitFormDialog({ open, onClose, editData }: Props) {
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="nama">Nama Unit <span className="text-destructive">*</span></Label>
-            <Input id="nama" value={form.nama} onChange={(e) => setForm((f) => ({ ...f, nama: e.target.value }))} placeholder="Nama unit organisasi" />
+            <Label htmlFor="name">Nama Unit <span className="text-destructive">*</span></Label>
+            <Input id="name" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="Nama unit organisasi" />
           </div>
 
           <div className="space-y-1.5">

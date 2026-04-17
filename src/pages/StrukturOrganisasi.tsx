@@ -1,27 +1,30 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { motion } from "framer-motion";
-import { Building2, Plus, Pencil, Trash2, Mail, Phone, MapPin } from "lucide-react";
+import { Building2, Plus, Pencil, Trash2, Mail, Phone, MapPin, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { OrgUnitFormDialog } from "@/components/dashboard/OrgUnitFormDialog";
 import { DeleteConfirmDialog } from "@/components/dashboard/DeleteConfirmDialog";
 import { toast } from "@/components/ui/use-toast";
+import { getAccessibleOrgUnits, getDescendants } from "@/utils/hierarchyPermissions";
+import type { OrgUnit as HierarchyOrgUnit } from "@/utils/hierarchyPermissions";
 
-type OrgLevel = "pusat" | "provinsi" | "kabupaten" | "kecamatan" | "ranting";
+type OrgLevel = "pusat" | "wilayah" | "kabupaten" | "kecamatan" | "ranting";
 
 type OrgUnit = {
   id: string;
-  nama: string;
-  level: OrgLevel;
+  name: string;
+  type: OrgLevel;
   parent_id: string | null;
   deskripsi: string | null;
   alamat: string | null;
   email: string | null;
   telepon: string | null;
+  hierarchy_level: number;
 };
 
 const LEVEL_COLORS: Record<OrgLevel, string> = {
@@ -33,32 +36,48 @@ const LEVEL_COLORS: Record<OrgLevel, string> = {
 };
 
 const StrukturOrganisasi = () => {
-  const { isAdmin } = useAuth();
+  const { isAdmin, orgUnitId, managedOrgUnits, hierarchyLevel, user } = useAuth();
   const qc = useQueryClient();
   const [formOpen, setFormOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<OrgUnit | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<OrgUnit | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
-  const [activeLevel, setActiveLevel] = useState<OrgLevel>("provinsi");
+  const [activeLevel, setActiveLevel] = useState<OrgLevel>("wilayah");
+
+  // Fetch all org units untuk permission checking
+  const { data: allOrgUnits } = useQuery({
+    queryKey: ["org-all-units"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("org_units")
+        .select("id, name, type, parent_id, hierarchy_level")
+        .order("hierarchy_level", { ascending: true });
+      return data || [];
+    },
+  });
 
   const { data: pusat } = useQuery({
     queryKey: ["org-pusat"],
     queryFn: async () => {
-      const { data } = await supabase.from("org_units").select("*").eq("level", "pusat").limit(1);
+      const { data } = await supabase.from("org_units").select("*").eq("type", "pusat").limit(1);
       return (data?.[0] ?? null) as OrgUnit | null;
     },
   });
 
-  const { data: provinces } = useQuery({
-    queryKey: ["org-provinces"],
+  const { data: wilayah } = useQuery({
+    queryKey: ["org-wilayah"],
     queryFn: async () => {
-      const { data } = await supabase.from("org_units").select("*").eq("level", "provinsi").order("nama");
+      const { data } = await supabase.from("org_units").select("*").eq("type", "wilayah").order("name");
       if (!data) return [];
 
       const result = await Promise.all(
-        data.map(async (prov) => {
-          const { count: kabCount } = await supabase.from("org_units").select("*", { count: "exact", head: true }).eq("parent_id", prov.id).eq("level", "kabupaten");
-          return { ...(prov as OrgUnit), kabCount: kabCount ?? 0 };
+        data.map(async (w) => {
+          const { count: kabCount } = await supabase
+            .from("org_units")
+            .select("*", { count: "exact", head: true })
+            .eq("parent_id", w.id)
+            .eq("type", "kabupaten");
+          return { ...(w as OrgUnit), kabCount: kabCount ?? 0 };
         })
       );
       return result;
@@ -68,12 +87,51 @@ const StrukturOrganisasi = () => {
   const { data: levelUnits } = useQuery({
     queryKey: ["org-level-units", activeLevel],
     queryFn: async () => {
-      if (activeLevel === "pusat" || activeLevel === "provinsi") return [];
-      const { data } = await supabase.from("org_units").select("*, org_units!parent_id(nama)").eq("level", activeLevel).order("nama");
-      return (data ?? []) as (OrgUnit & { org_units?: { nama: string } | null })[];
+      if (activeLevel === "pusat" || activeLevel === "wilayah") return [];
+      const { data } = await supabase
+        .from("org_units")
+        .select("*, org_units!parent_id(name)")
+        .eq("type", activeLevel)
+        .order("name");
+      return (data ?? []) as (OrgUnit & { org_units?: { name: string } | null })[];
     },
-    enabled: activeLevel !== "pusat" && activeLevel !== "provinsi",
+    enabled: activeLevel !== "pusat" && activeLevel !== "wilayah",
   });
+
+  // Filter accessible units berdasarkan hierarchy permissions
+  const accessibleUnits = useMemo(() => {
+    if (!allOrgUnits || !isAdmin) return [];
+
+    if (hierarchyLevel === 0) {
+      // Super admin pusat bisa akses semua
+      return allOrgUnits;
+    }
+
+    // Admin non-pusat hanya bisa akses managed units + descendants
+    const currentUserData = {
+      id: user?.id || '',
+      email: user?.email || '',
+      role: 'admin' as const,
+      org_unit_id: orgUnitId,
+      managed_org_units: managedOrgUnits,
+      hierarchy_level: hierarchyLevel,
+    };
+
+    return getAccessibleOrgUnits(currentUserData, allOrgUnits as HierarchyOrgUnit[]);
+  }, [allOrgUnits, isAdmin, hierarchyLevel, orgUnitId, managedOrgUnits, user?.id, user?.email]);
+
+  // Filter units to display based on accessible units
+  const filteredWilayah = useMemo(() => {
+    if (!wilayah) return [];
+    const accessibleIds = new Set(accessibleUnits.map(u => u.id));
+    return wilayah.filter(w => accessibleIds.has(w.id));
+  }, [wilayah, accessibleUnits]);
+
+  const filteredLevelUnits = useMemo(() => {
+    if (!levelUnits) return [];
+    const accessibleIds = new Set(accessibleUnits.map(u => u.id));
+    return levelUnits.filter(u => accessibleIds.has(u.id));
+  }, [levelUnits, accessibleUnits]);
 
   const handleEdit = (unit: OrgUnit) => {
     setEditTarget(unit);
@@ -137,8 +195,8 @@ const StrukturOrganisasi = () => {
           >
             <div className="bg-primary text-primary-foreground px-8 py-4 rounded-xl font-bold text-sm uppercase tracking-wider shadow-lg glow-primary flex items-center gap-3">
               <Building2 className="size-4" />
-              {pusat ? pusat.nama : "Pengurus Pusat"}
-              {isAdmin && pusat && (
+              {pusat ? pusat.name : "Pengurus Pusat"}
+              {isAdmin && hierarchyLevel === 0 && pusat && (
                 <div className="flex gap-1 ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button
                     className="size-6 flex items-center justify-center rounded hover:bg-white/20 transition-colors"
@@ -155,7 +213,7 @@ const StrukturOrganisasi = () => {
 
         {/* Level filter tabs */}
         <div className="flex gap-2 flex-wrap">
-          {(["provinsi", "kabupaten", "kecamatan", "ranting"] as OrgLevel[]).map((l) => (
+          {(["wilayah", "kabupaten", "kecamatan", "ranting"] as OrgLevel[]).map((l) => (
             <button
               key={l}
               onClick={() => setActiveLevel(l)}
@@ -170,51 +228,51 @@ const StrukturOrganisasi = () => {
           ))}
         </div>
 
-        {/* Provinsi grid */}
-        {activeLevel === "provinsi" && (
-          provinces && provinces.length > 0 ? (
+        {/* Wilayah grid */}
+        {activeLevel === "wilayah" && (
+          filteredWilayah && filteredWilayah.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {provinces.map((prov, i) => (
+              {filteredWilayah.map((w, i) => (
                 <motion.div
-                  key={prov.id}
+                  key={w.id}
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 0.1 + i * 0.05 }}
                   className="glass-surface rounded-xl p-5 hover:border-primary/30 transition-colors group"
                 >
                   <div className="flex items-start justify-between mb-2">
-                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">PROVINSI</p>
-                    {isAdmin && (
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">WILAYAH</p>
+                    {isAdmin && accessibleUnits.some(u => u.id === w.id) && (
                       <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Button variant="ghost" size="icon" className="size-6 text-muted-foreground hover:text-foreground" onClick={() => handleEdit(prov)}>
+                        <Button variant="ghost" size="icon" className="size-6 text-muted-foreground hover:text-foreground" onClick={() => handleEdit(w)}>
                           <Pencil className="size-3" />
                         </Button>
-                        <Button variant="ghost" size="icon" className="size-6 text-muted-foreground hover:text-destructive" onClick={() => setDeleteTarget(prov)}>
+                        <Button variant="ghost" size="icon" className="size-6 text-muted-foreground hover:text-destructive" onClick={() => setDeleteTarget(w)}>
                           <Trash2 className="size-3" />
                         </Button>
                       </div>
                     )}
                   </div>
-                  <h3 className="text-base font-bold text-foreground group-hover:text-primary transition-colors">{prov.nama}</h3>
-                  {prov.deskripsi && <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{prov.deskripsi}</p>}
+                  <h3 className="text-base font-bold text-foreground group-hover:text-primary transition-colors">{w.name}</h3>
+                  {w.deskripsi && <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{w.deskripsi}</p>}
                   <div className="mt-3 space-y-1 text-xs text-muted-foreground">
-                    <div className="flex justify-between"><span>Kabupaten/Kota</span><span className="font-mono tabular-nums">{prov.kabCount}</span></div>
-                    {prov.email && <div className="flex items-center gap-1.5 truncate"><Mail className="size-3 shrink-0" /><span className="truncate">{prov.email}</span></div>}
-                    {prov.telepon && <div className="flex items-center gap-1.5"><Phone className="size-3 shrink-0" />{prov.telepon}</div>}
+                    <div className="flex justify-between"><span>Kabupaten</span><span className="font-mono tabular-nums">{w.kabCount}</span></div>
+                    {w.email && <div className="flex items-center gap-1.5 truncate"><Mail className="size-3 shrink-0" /><span className="truncate">{w.email}</span></div>}
+                    {w.telepon && <div className="flex items-center gap-1.5"><Phone className="size-3 shrink-0" />{w.telepon}</div>}
                   </div>
                 </motion.div>
               ))}
             </div>
           ) : (
-            <div className="text-center py-12 text-muted-foreground">Belum ada data provinsi.</div>
+            <div className="text-center py-12 text-muted-foreground">Belum ada data wilayah yang dapat diakses.</div>
           )
         )}
 
         {/* Other levels grid */}
-        {activeLevel !== "provinsi" && (
-          levelUnits && levelUnits.length > 0 ? (
+        {activeLevel !== "wilayah" && (
+          filteredLevelUnits && filteredLevelUnits.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {levelUnits.map((unit, i) => (
+              {filteredLevelUnits.map((unit, i) => (
                 <motion.div
                   key={unit.id}
                   initial={{ opacity: 0, y: 20 }}
@@ -224,7 +282,7 @@ const StrukturOrganisasi = () => {
                 >
                   <div className="flex items-start justify-between mb-1">
                     <Badge variant="outline" className={`text-[10px] uppercase ${LEVEL_COLORS[activeLevel]}`}>{activeLevel}</Badge>
-                    {isAdmin && (
+                    {isAdmin && accessibleUnits.some(u => u.id === unit.id) && (
                       <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         <Button variant="ghost" size="icon" className="size-6 text-muted-foreground hover:text-foreground" onClick={() => handleEdit(unit)}>
                           <Pencil className="size-3" />
@@ -235,9 +293,9 @@ const StrukturOrganisasi = () => {
                       </div>
                     )}
                   </div>
-                  <h3 className="text-sm font-bold text-foreground mt-1">{unit.nama}</h3>
-                  {unit.org_units?.nama && (
-                    <p className="text-[10px] text-muted-foreground mt-0.5">Induk: {unit.org_units.nama}</p>
+                  <h3 className="text-sm font-bold text-foreground mt-1">{unit.name}</h3>
+                  {unit.org_units?.name && (
+                    <p className="text-[10px] text-muted-foreground mt-0.5">Induk: {unit.org_units.name}</p>
                   )}
                   {unit.deskripsi && <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{unit.deskripsi}</p>}
                   <div className="mt-2 space-y-1">
@@ -249,8 +307,24 @@ const StrukturOrganisasi = () => {
               ))}
             </div>
           ) : (
-            <div className="text-center py-12 text-muted-foreground capitalize">Belum ada data {activeLevel}.</div>
+            <div className="text-center py-12 text-muted-foreground">
+              {levelUnits?.length === 0 
+                ? `Belum ada data ${activeLevel}.`
+                : `Tidak ada data ${activeLevel} yang dapat diakses di unit organisasi Anda.`
+              }
+            </div>
           )
+        )}
+
+        {/* Info untuk admin non-pusat */}
+        {isAdmin && hierarchyLevel !== 0 && (
+          <div className="flex gap-2 text-xs text-amber-600/80 bg-amber-50 border border-amber-200 rounded-lg p-3">
+            <AlertCircle className="size-4 shrink-0 mt-0.5" />
+            <p>
+              Anda dapat melihat dan mengelola unit organisasi di tingkat Anda dan di bawahnya.
+              Untuk mengelola unit di atas tingkat Anda, silakan hubungi administrator tingkat yang lebih tinggi.
+            </p>
+          </div>
         )}
       </div>
 
