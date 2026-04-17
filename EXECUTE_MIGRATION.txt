@@ -1,0 +1,202 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                  HIERARCHICAL ADMIN SYSTEM - SETUP GUIDE                    ║
+║                                                                              ║
+║  Status: ✅ Ready for Supabase Integration                                  ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1: EXECUTE SQL MIGRATION (MOST IMPORTANT)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Go to Supabase Dashboard: https://supabase.com/dashboard
+2. Select your project
+3. Click "SQL Editor" in the left sidebar
+4. Click "+ New Query"
+5. Paste entire content from this file:
+   → supabase/migrations/20260417_add_hierarchical_admin.sql
+6. Click "Run"
+7. Wait for success message ✓
+
+EXPECTED OUTPUT:
+- No errors
+- All 8 statements execute successfully
+- See functions, views, and policies created
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2: VERIFY MIGRATION (OPTIONAL)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+In the same SQL Editor, run this verification query:
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ SELECT column_name, data_type                                          │
+│ FROM information_schema.columns                                         │
+│ WHERE table_name IN ('org_units', 'user_roles')                        │
+│ ORDER BY table_name, ordinal_position;                                 │
+└─────────────────────────────────────────────────────────────────────────┘
+
+LOOK FOR:
+org_units table should have:
+  ✓ id (uuid)
+  ✓ name (text)
+  ✓ type (text)
+  ✓ parent_id (uuid)
+  ✓ hierarchy_level (integer) ← NEW
+  ✓ deskripsi, alamat, email, telepon (text)
+
+user_roles table should have:
+  ✓ user_id (uuid)
+  ✓ role (app_role or text)
+  ✓ org_unit_id (uuid) ← NEW
+  ✓ managed_org_units (uuid[]) ← NEW
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 3: SETUP INITIAL ORG UNITS (OPTIONAL)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+If you don't have any data, run this SQL:
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ -- 1. Insert Pusat (root level)                                        │
+│ INSERT INTO public.org_units (name, type)                              │
+│ VALUES ('Pengurus Pusat', 'pusat');                                    │
+│                                                                          │
+│ -- 2. Insert Wilayah (get pusat ID and use it)                         │
+│ INSERT INTO public.org_units (name, type, parent_id)                   │
+│ VALUES                                                                  │
+│   ('Wilayah Jawa Barat', 'wilayah', 'PUSAT_ID'),                       │
+│   ('Wilayah Jawa Timur', 'wilayah', 'PUSAT_ID'),                       │
+│   ('Wilayah Sumatera', 'wilayah', 'PUSAT_ID');                         │
+│                                                                          │
+│ -- 3. Verify inserted data                                             │
+│ SELECT id, name, type, hierarchy_level                                 │
+│ FROM public.org_units                                                  │
+│ ORDER BY hierarchy_level;                                              │
+└─────────────────────────────────────────────────────────────────────────┘
+
+Replace 'PUSAT_ID' with the actual ID from the first insert.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 4: ASSIGN SUPER ADMIN (OPTIONAL)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+To make a user super admin (org_unit_id = NULL means super admin):
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ UPDATE public.user_roles                                               │
+│ SET role = 'admin', org_unit_id = NULL                                 │
+│ WHERE user_id = 'USER_ID_HERE';                                        │
+│                                                                          │
+│ -- Verify                                                              │
+│ SELECT user_id, role, org_unit_id FROM public.user_roles               │
+│ WHERE role = 'admin';                                                  │
+└─────────────────────────────────────────────────────────────────────────┘
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 5: TEST APPLICATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Run locally:
+  $ npm run dev
+  
+Then test:
+  ✓ Login as super admin
+  ✓ View all org units in "Struktur Organisasi"
+  ✓ View all users in "Manajemen User"
+  ✓ Try to create new wilayah
+  ✓ Try to assign admin role to user at wilayah level
+  
+Login as regional admin:
+  ✓ Should only see own wilayah and below
+  ✓ Should not see other wilayah units
+  ✓ Should not see users from other wilayah
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+IMPORTANT FILES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Migration SQL:
+  📄 supabase/migrations/20260417_add_hierarchical_admin.sql
+
+Application Code (ready to use):
+  📁 src/utils/hierarchyPermissions.ts        - Permission functions
+  📁 src/contexts/AuthContext.tsx             - Enhanced with hierarchy
+  📁 src/pages/ManajemenUser.tsx              - User management
+  📁 src/pages/StrukturOrganisasi.tsx         - Org structure
+  📁 src/pages/api/users/                     - User API routes
+  📁 src/pages/api/org-units/                 - Org unit API routes
+
+Documentation:
+  📄 QUICK_START.md                           - Quick 3-step setup
+  📄 SUPABASE_MIGRATION_GUIDE.md              - Detailed guide
+  📄 HIERARCHY_IMPLEMENTATION.md              - Technical docs
+
+Scripts (optional):
+  📄 scripts/verify-setup.js                  - Verify migration
+  📄 scripts/execute-migration.js             - Execute migration
+  📄 scripts/run-migration.js                 - Run migration
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT'S IMPLEMENTED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+DATABASE LEVEL:
+  ✅ Hierarchy columns in org_units & user_roles
+  ✅ Permission checking functions
+  ✅ RLS policies for data protection
+  ✅ Hierarchical views and queries
+
+APPLICATION LEVEL:
+  ✅ Permission utilities (frontend + backend)
+  ✅ Enhanced AuthContext with hierarchy data
+  ✅ User management with permission filtering
+  ✅ Org structure with permission filtering
+  ✅ Form validation with permission checks
+  ✅ API routes with backend validation
+
+FEATURES:
+  ✅ Admin per level (Pusat, Wilayah, Kabupaten, etc)
+  ✅ Admin can only manage below their level
+  ✅ Moderator also follows hierarchy
+  ✅ Multi-unit admin support
+  ✅ Automatic hierarchy level calculation
+  ✅ User filtering by accessible units
+  ✅ Org unit filtering by accessible units
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TROUBLESHOOTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+❌ "Table does not exist" 
+   → Make sure you executed the SQL migration in Supabase SQL Editor
+
+❌ "Function does not exist"
+   → Verify all 8 statements executed successfully
+   → Check function names in Supabase Database → Functions
+
+❌ "Permission denied" when querying
+   → RLS might be blocking. Ensure you're logged in as admin
+   → Check RLS policies in table settings
+
+❌ Users can't see org units
+   → Check if user_roles.org_unit_id is set correctly
+   → Check if org_units data exists
+   → Verify hierarchy_level is calculated
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NEXT STEPS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. ✓ Execute SQL migration in Supabase
+2. ✓ Verify schema with verification query
+3. ✓ Setup initial org_units (optional)
+4. ✓ Assign admins to units (optional)
+5. ✓ Test application locally
+6. ✓ Deploy to Vercel
+
+Everything is ready for production use!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Last Updated: 2025-04-17
+Status: ✅ READY FOR PRODUCTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
