@@ -1,0 +1,126 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 10% 5%;
+    --foreground: 210 20% 90%;
+
+    --card: 220 10% 8%;
+    --card-foreground: 210 20% 90%;
+
+    --popover: 220 10% 8%;
+    --popover-foreground: 210 20% 90%;
+
+    --primary: 18 100% 56%;
+    --primary-foreground: 0 0% 0%;
+
+    --secondary: 220 10% 12%;
+    --secondary-foreground: 210 20% 90%;
+
+    --muted: 220 10% 15%;
+    --muted-foreground: 215 10% 50%;
+
+    --accent: 18 100% 56%;
+    --accent-foreground: 0 0% 0%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 220 10% 14%;
+    --input: 220 10% 14%;
+    --ring: 18 100% 56%;
+
+    --radius: 0.75rem;
+
+    --sidebar-background: 220 10% 6%;
+    --sidebar-foreground: 210 20% 70%;
+    --sidebar-primary: 18 100% 56%;
+    --sidebar-primary-foreground: 0 0% 0%;
+    --sidebar-accent: 18 100% 56%;
+    --sidebar-accent-foreground: 0 0% 0%;
+    --sidebar-border: 220 10% 12%;
+    --sidebar-ring: 18 100% 56%;
+
+    --success: 160 84% 39%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 0%;
+
+    --chart-1: 18 100% 56%;
+    --chart-2: 160 84% 39%;
+    --chart-3: 217 91% 60%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 38 92% 50%;
+
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted));
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground));
+  }
+}
+
+@layer utilities {
+  .glass-surface {
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    backdrop-filter: blur(12px);
+  }
+
+  .glow-primary {
+    box-shadow: 0 0 20px hsl(var(--primary) / 0.15);
+  }
+
+  .grid-bg {
+    background-image:
+      linear-gradient(hsl(var(--border) / 0.5) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.5) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+
+  .stat-card-glow {
+    position: relative;
+    overflow: hidden;
+  }
+  .stat-card-glow::after {
+    content: '';
+    position: absolute;
+    bottom: -20px;
+    right: -20px;
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    filter: blur(40px);
+    opacity: 0.3;
+    background: hsl(var(--primary));
+    transition: opacity 0.3s;
+  }
+  .stat-card-glow:hover::after {
+    opacity: 0.5;
+  }
+}
